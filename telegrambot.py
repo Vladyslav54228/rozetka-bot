@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 logging.basicConfig(filename="bot.log", format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Шпаргалки (усі ваші нотатки з оригінального коду)
+# Шпаргалки (усі ваші нотатки)
 NOTES = {
     "Прийом сервісного товару": """
 📦 <b>Прийом сервісного товару зі складу (брак):</b>
@@ -132,61 +132,83 @@ NOTES = {
 
 # Ініціалізація SQLite
 def init_db():
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            time TEXT,
-            text TEXT,
-            chat_id INTEGER,
-            repeat TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS workdays (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            days TEXT
-        )
-    """)
-    cursor.execute("INSERT OR IGNORE INTO workdays (id, days) VALUES (1, ?)", (json.dumps([0, 1, 2, 3, 4]),))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect("bot_data.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                time TEXT,
+                text TEXT,
+                chat_id INTEGER,
+                repeat TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS workdays (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                days TEXT
+            )
+        """)
+        cursor.execute("INSERT OR IGNORE INTO workdays (id, days) VALUES (1, ?)", (json.dumps([0, 1, 2, 3, 4]),))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+    finally:
+        conn.close()
 
 # Читання/збереження нагадувань
 def load_reminders():
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT time, text, chat_id, repeat FROM reminders")
-    reminders = [{"time": row[0], "text": row[1], "chat_id": row[2], "repeat": row[3]} for row in cursor.fetchall()]
-    conn.close()
-    return reminders
+    try:
+        conn = sqlite3.connect("bot_data.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT time, text, chat_id, repeat FROM reminders")
+        reminders = [{"time": row[0], "text": row[1], "chat_id": row[2], "repeat": row[3]} for row in cursor.fetchall()]
+        return reminders
+    except Exception as e:
+        logger.error(f"Failed to load reminders: {e}")
+        return []
+    finally:
+        conn.close()
 
 def save_reminders(reminders):
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM reminders")
-    for reminder in reminders:
-        cursor.execute("INSERT INTO reminders (time, text, chat_id, repeat) VALUES (?, ?, ?, ?)",
-                       (reminder["time"], reminder["text"], reminder["chat_id"], reminder.get("repeat")))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect("bot_data.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM reminders")
+        for reminder in reminders:
+            cursor.execute("INSERT INTO reminders (time, text, chat_id, repeat) VALUES (?, ?, ?, ?)",
+                           (reminder["time"], reminder["text"], reminder["chat_id"], reminder.get("repeat")))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to save reminders: {e}")
+    finally:
+        conn.close()
 
 # Читання/збереження робочих днів
 def load_workdays():
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT days FROM workdays WHERE id = 1")
-    result = cursor.fetchone()
-    conn.close()
-    return json.loads(result[0]) if result else [0, 1, 2, 3, 4]
+    try:
+        conn = sqlite3.connect("bot_data.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT days FROM workdays WHERE id = 1")
+        result = cursor.fetchone()
+        return json.loads(result[0]) if result else [0, 1, 2, 3, 4]
+    except Exception as e:
+        logger.error(f"Failed to load workdays: {e}")
+        return [0, 1, 2, 3, 4]
+    finally:
+        conn.close()
 
 def save_workdays(workdays):
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE workdays SET days = ? WHERE id = 1", (json.dumps(workdays),))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect("bot_data.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE workdays SET days = ? WHERE id = 1", (json.dumps(workdays),))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to save workdays: {e}")
+    finally:
+        conn.close()
 
 # Перевірка робочого дня
 def is_workday():
@@ -384,12 +406,16 @@ async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
                 (reminder.get("last_triggered") is None or
                  (now - datetime.fromisoformat(reminder["last_triggered"])).days >= 7)
             ):
-                await context.bot.send_message(
-                    chat_id=reminder["chat_id"],
-                    text=f"⏰ Нагадування: {reminder['text']}"
-                )
-                if reminder.get("repeat") == "weekly":
-                    reminder["last_triggered"] = now.isoformat()
+                try:
+                    await context.bot.send_message(
+                        chat_id=reminder["chat_id"],
+                        text=f"⏰ Нагадування: {reminder['text']}"
+                    )
+                    logger.info(f"Sent reminder to {reminder['chat_id']}: {reminder['time']} - {reminder['text']}")
+                    if reminder.get("repeat") == "weekly":
+                        reminder["last_triggered"] = now.isoformat()
+                except Exception as e:
+                    logger.error(f"Failed to send reminder to {reminder['chat_id']}: {e}")
     save_reminders(reminders)
 
 def main():
@@ -419,14 +445,24 @@ def main():
         if not webhook_url:
             logger.error("WEBHOOK_URL is not set")
             raise ValueError("WEBHOOK_URL is not set")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path="/bot",
-            webhook_url=f"{webhook_url}/bot"
-        )
+        try:
+            app.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path="/bot",
+                webhook_url=f"{webhook_url}/bot"
+            )
+            logger.info(f"Webhook started on {webhook_url}/bot")
+        except Exception as e:
+            logger.error(f"Failed to start webhook: {e}")
+            raise
     else:
-        app.run_polling()
+        try:
+            app.run_polling()
+            logger.info("Polling started for local testing")
+        except Exception as e:
+            logger.error(f"Failed to start polling: {e}")
+            raise
 
 if __name__ == "__main__":
     main()
